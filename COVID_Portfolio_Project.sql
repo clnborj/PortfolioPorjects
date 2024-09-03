@@ -1,0 +1,326 @@
+-- SELECT DATA TO BE USED
+SELECT LOCATION, DATE, NEW_CASES, TOTAL_CASES, TOTAL_DEATHS, POPULATION
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+AND ISO_CODE = 'PHL'
+ORDER BY 1, 2;
+
+-- LOOKING AT TOTAL CASES VS TOTAL DEATHS
+SELECT LOCATION, DATE, TOTAL_CASES, TOTAL_DEATHS, (TOTAL_DEATHS/TOTAL_CASES)*100 AS DEATH_PERCENTAGE
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+ORDER BY 1, 2; 
+
+-- List of Countries and the corresponding Day on which the death percentage was the highest
+WITH RankedDeaths AS (
+    SELECT 
+        LOCATION, DATE, TOTAL_CASES, TOTAL_DEATHS, 
+        CASE 
+            WHEN TOTAL_CASES > 0 THEN (TOTAL_DEATHS / TOTAL_CASES) * 100 
+            ELSE 0 -- to avoid division by zero
+            END AS DEATH_PERCENTAGE,
+        ROW_NUMBER() OVER (PARTITION BY LOCATION -- assigns a rank based on the highest death percentage within each location
+            ORDER BY 
+                CASE 
+                    WHEN TOTAL_CASES > 0 THEN (TOTAL_DEATHS / TOTAL_CASES) * 100 
+                    ELSE 0 
+                END DESC
+			) AS RN
+    FROM COVIDDEATHS
+    WHERE CONTINENT IS NOT NULL
+)
+SELECT 
+    LOCATION, 
+    DATE, 
+    TOTAL_CASES, 
+    TOTAL_DEATHS, 
+    DEATH_PERCENTAGE
+FROM RankedDeaths
+WHERE RN = 1 -- row with the highest DEATH_PERCENTAGE will have RN = 1
+ORDER BY 1, 2;
+
+-- TOTAL CASES VS POPULATION
+-- COUNTRIES WITH HIGHEST INFECTION RATE COMPARED TO POPULATION
+SELECT 
+    CONTINENT,
+    LOCATION,
+    POPULATION,
+    SUM(NEW_CASES) AS TOTAL_CASES,
+				-- `NEW_CASES` column is used instead of using MAX of `TOTAL_CASES` column; 
+                -- MAX(TOTAL_CASES) might not always reflect the latest cumulative counts probably due to data reporting or update delays. 
+                -- The SUM based on NEW_CASES can dynamically adjust as more recent data is included. Hence, it is more accurate.
+    ROUND((SUM(NEW_CASES) / POPULATION) * 100, 2) AS PERCENT_POPULATION_INFECTED
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+GROUP BY CONTINENT, LOCATION, POPULATION
+ORDER BY 4 DESC; 
+
+-- ^ (Using CTE & Window Function to show the running total of NEW_CASES)
+WITH Infections AS (
+    SELECT LOCATION, DATE, POPULATION, 
+			SUM(NEW_CASES) OVER (PARTITION BY LOCATION ORDER BY DATE) AS CUMULATIVE_CASES 
+    FROM COVIDDEATHS
+    WHERE CONTINENT IS NOT NULL
+)
+SELECT 
+    LOCATION, 
+    POPULATION, 
+    MAX(CUMULATIVE_CASES) AS HIGHEST_INFECTION_COUNT, 
+    ROUND(MAX((CUMULATIVE_CASES / POPULATION) * 100),2) AS PERCENT_POPULATION_INFECTED
+FROM Infections
+GROUP BY LOCATION, POPULATION
+ORDER BY 4 DESC;
+
+-- TOTAL CASES, DEATHS, AND DEATH RATES BY COUNTRY
+SELECT 
+    LOCATION,
+    POPULATION,
+    SUM(NEW_CASES) AS TOTAL_CASES,
+    SUM(NEW_DEATHS) AS TOTAL_DEATHS,
+    ROUND((SUM(NEW_CASES) / POPULATION) * 100, 2) AS INFECTION_RATE,
+    ROUND((SUM(NEW_DEATHS) / POPULATION) * 100, 2) AS MORTALITY_RATE
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+GROUP BY LOCATION, POPULATION
+ORDER BY 5 DESC, 6 DESC;
+
+
+-- ^ (Using CTE & Window Function to show the running total of NEW_CASES and NEW_DEATHS)
+WITH CumulativeData AS (
+    SELECT 
+        LOCATION,
+        POPULATION,
+        SUM(NEW_CASES) OVER (PARTITION BY LOCATION ORDER BY DATE) AS CUMULATIVE_CASES,
+        SUM(NEW_DEATHS) OVER (PARTITION BY LOCATION ORDER BY DATE) AS CUMULATIVE_DEATHS
+    FROM COVIDDEATHS
+    WHERE CONTINENT IS NOT NULL
+)
+SELECT 
+    LOCATION,
+    POPULATION,
+    MAX(CUMULATIVE_CASES) AS TOTAL_CASES,
+	MAX(CUMULATIVE_DEATHS) AS TOTAL_DEATHS,
+    ROUND(MAX((CUMULATIVE_CASES / POPULATION) * 100), 2) AS INFECTION_RATE,
+    ROUND(MAX((CUMULATIVE_DEATHS / POPULATION) * 100), 2) AS MORTALITY_RATE
+FROM CumulativeData
+GROUP BY LOCATION, POPULATION
+ORDER BY 5 DESC, 6 DESC;
+
+-- ^CTE: CFR (CASE FATALITY RATIO) PERCENTAGE: DEATHS VS CASES
+-- ### CFR has been found to be an unreliable measure of the true risk of dying from the disease
+-- ### Assessing disease severity or epidemic control effectiveness solely based on CFR comparisons could be misleading 
+	-- and prone to bias before accounting for age structure variations and achieving comparable case detection levels across countries.
+	-- https://www.ijidonline.com/article/S1201-9712(24)00018-3/fulltext
+	-- https://ourworldindata.org/mortality-risk-covid
+SELECT 
+	LOCATION, 
+	SUM(NEW_CASES) AS CASE_COUNT,
+    SUM(NEW_DEATHS) AS DEATH_COUNT,
+    ROUND(SUM(NEW_DEATHS)/SUM(NEW_CASES)*100,2) AS CFR
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+GROUP BY 1
+ORDER BY CFR DESC;
+
+-- TOTAL CASE COUNT:
+-- A.) by COUNTRIES
+SELECT 
+    LOCATION, 
+	SUM(NEW_CASES) AS TOTAL_CASE_COUNT
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+GROUP BY LOCATION
+ORDER BY 2 DESC;
+
+-- ^ (Using CTE & Window Function to show the running total of NEW_CASES)
+WITH COUNTRY_CASES_CTE AS (
+	SELECT CONTINENT, LOCATION, DATE, NEW_CASES,
+		SUM(NEW_CASES) OVER (PARTITION BY LOCATION ORDER BY LOCATION, DATE) AS TOTAL_CASES
+	FROM COVIDDEATHS
+	WHERE CONTINENT IS NOT NULL)
+SELECT
+    LOCATION,
+    MAX(TOTAL_CASES) AS TOTAL_CASE_COUNT
+FROM COUNTRY_CASES_CTE
+GROUP BY LOCATION
+ORDER BY 2 DESC;
+
+-- B.) by CONTINENT
+SELECT 
+	CONTINENT, 
+	SUM(NEW_CASES) AS Total_Cases_Per_Continent
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+GROUP BY CONTINENT
+ORDER BY 2 DESC;
+
+-- C.) COUNTRIES ACCORDING TO CONTINENT IN ORDER 
+SELECT 
+	CONTINENT, 
+    LOCATION,
+	SUM(NEW_CASES) AS TOTAL_CASE_COUNT
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+GROUP BY CONTINENT, LOCATION
+ORDER BY 1 ASC, 3 DESC;
+
+-- TOTAL DEATH COUNT:
+-- A.) by COUNTRIES
+SELECT 
+    LOCATION, 
+	SUM(NEW_DEATHS) AS TOTAL_DEATH_COUNT
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+GROUP BY LOCATION
+ORDER BY 2 DESC;
+
+-- B.) by CONTINENT
+SELECT 
+    CONTINENT, 
+	SUM(NEW_DEATHS) AS TOTAL_DEATH_COUNT
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+GROUP BY CONTINENT
+ORDER BY 2 DESC;
+
+-- C.) COUNTRIES ACCORDING TO CONTINENT IN ORDER 
+SELECT 
+	CONTINENT, 
+    LOCATION,
+	SUM(NEW_DEATHS) AS TOTAL_DEATH_COUNT
+FROM COVIDDEATHS
+WHERE CONTINENT IS NOT NULL
+GROUP BY CONTINENT, LOCATION
+ORDER BY 1 ASC, 3 DESC;
+
+
+
+
+
+
+
+-- TOTAL POPULATION VS VACCINATIONS
+-- Shows percentage of Population that has received at least ONCE DOSE of Covid Vaccine 
+SELECT 
+	CONTINENT, 
+    LOCATION, 
+    POPULATION, 
+    DATE,
+	TOTAL_VACCINATIONS, -- total number of vaccine doses administered; includes 1ST & 2ND doses (for vaccines that require two doses), and possibly additional doses such as boosters.
+	PEOPLE_VACCINATED,  -- number of individuals who have received at least one dose of a COVID-19 vaccine
+	PEOPLE_FULLY_VACCINATED
+FROM COVIDVACCS
+WHERE CONTINENT IS NOT NULL;
+
+-- ^CTE
+WITH POP_VS_VACCS AS 
+	(
+    SELECT CONTINENT, LOCATION, POPULATION, DATE,
+		TOTAL_VACCINATIONS,
+        PEOPLE_VACCINATED,
+        PEOPLE_FULLY_VACCINATED
+	FROM COVIDVACCS
+    WHERE CONTINENT IS NOT NULL
+    )
+SELECT
+	CONTINENT, LOCATION, POPULATION,
+    MAX(TOTAL_VACCINATIONS) AS TOTAL_VACCS,
+    MAX(PEOPLE_VACCINATED) AS PPL_VACCINATED,
+    MAX(PEOPLE_FULLY_VACCINATED) AS PPL_FULLY_VACCINATED
+FROM POP_VS_VACCS
+GROUP BY CONTINENT, LOCATION, POPULATION
+ORDER BY 1,2;
+
+-- ^CREATE VIEW
+CREATE VIEW Population_Vs_Vaccinations AS
+WITH POP_VS_VACCS AS 
+(
+    SELECT 
+        CONTINENT, 
+        LOCATION, 
+        POPULATION, 
+        DATE,
+        TOTAL_VACCINATIONS,
+        PEOPLE_VACCINATED,
+        PEOPLE_FULLY_VACCINATED
+    FROM COVIDVACCS
+    WHERE CONTINENT IS NOT NULL
+)
+SELECT
+    CONTINENT, 
+    LOCATION, 
+    POPULATION,
+    MAX(TOTAL_VACCINATIONS) AS TOTAL_VACCS,
+    MAX(PEOPLE_VACCINATED) AS PPL_VACCINATED,
+    MAX(PEOPLE_FULLY_VACCINATED) AS PPL_FULLY_VACCINATED
+FROM POP_VS_VACCS
+GROUP BY CONTINENT, LOCATION, POPULATION
+ORDER BY 1, 2;
+
+
+-- ^CREATE TABLE
+DROP TABLE IF EXISTS VACCS_VS_POPULATION;
+CREATE TABLE VACCS_VS_POPULATION AS
+WITH POP_VS_VACCS AS 
+    (
+    SELECT CONTINENT, LOCATION, POPULATION, DATE,
+        TOTAL_VACCINATIONS,
+        PEOPLE_VACCINATED,
+        PEOPLE_FULLY_VACCINATED
+    FROM COVIDVACCS
+    WHERE CONTINENT IS NOT NULL
+    )
+SELECT
+    CONTINENT, LOCATION, POPULATION,
+    MAX(TOTAL_VACCINATIONS) AS TOTAL_VACCS,
+    MAX(PEOPLE_VACCINATED) AS PPL_VACCINATED,
+    MAX(PEOPLE_FULLY_VACCINATED) AS PPL_FULLY_VACCINATED
+FROM POP_VS_VACCS
+GROUP BY CONTINENT, LOCATION, POPULATION
+ORDER BY CONTINENT, LOCATION;
+
+-- NUMBER AND PERCENTAGE OF PEOPLE WHO HAVE RECEIVED AT LEAST ONE DOSE OF A COVID-19 VACCINE
+	-- Possible reason for Countries beyond 100% of the local population:
+		-- Data might include temporary residents, tourists or non-citizens who receive vaccinations in that location but are not counted in the local population statistics.
+		-- Changes in population due to migration, birth or death may not be accurately reflected in latest population estimates. 
+		-- If a country has seen increasing migration trends or if a national population statistic is lower than the count recorded in statistical calculations, 
+		-- it can result in a vaccination coverage percentage greater than 100%. (WHO Data: https://data.who.int/dashboards/covid19/vaccines?n=o)
+SELECT 
+	LOCATION, 
+    POPULATION, 
+    PPL_VACCINATED,
+    ROUND((PPL_VACCINATED/POPULATION)*100, 2) AS Percent_atleast_One_Dose,
+    PPL_FULLY_VACCINATED,
+    ROUND((PPL_FULLY_VACCINATED/POPULATION)*100, 2) AS Percent_Fully_Vaccinated
+FROM VACCS_VS_POPULATION
+ORDER BY Percent_atleast_One_Dose DESC;
+
+
+
+
+-- Percentage of people who have received at least one dose of a COVID-19 vaccine within each continent
+	-- Reporting Overall Vaccination Progress: 
+		-- This query is ideal for reporting the overall progress of vaccination efforts at a continental level. 
+        -- It gives a true reflection of what percentage of the entire continent’s population has been vaccinated.
+	-- Comparing Continental Efforts: 
+		-- Use this when you want to compare continents based on their total vaccinated population relative to their total population. 
+        -- It’s accurate and considers the size of each country, making it suitable for broad, high-level reporting.
+SELECT 
+	CONTINENT, 
+    ROUND((SUM(PPL_VACCINATED)/SUM(POPULATION))*100, 2) AS Percent_atleast_One_Dose
+FROM VACCS_VS_POPULATION
+GROUP BY CONTINENT
+ORDER BY 2 DESC;
+
+-- AVERAGE percentage of vaccinated people per country within each continent.
+SELECT 
+	CONTINENT, 
+    ROUND(AVG((PPL_VACCINATED/POPULATION)*100),2) AS Percent_atleast_One_Dose
+FROM VACCS_VS_POPULATION
+GROUP BY CONTINENT
+ORDER BY 2 DESC;
+
+
+
+
+
